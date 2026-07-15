@@ -1,0 +1,506 @@
+<title>スーパーおしっこ垂れ流しブラザーズ</title>
+<style>
+  :root{
+    --bezel:#0b0e14;
+    --bezel-edge:#1a2030;
+    --marquee:#ffd23f;
+    --marquee-dim:#c9a227;
+    --text:#e8e4d8;
+    --text-dim:#8f94a3;
+    --danger:#e23b2e;
+  }
+  /* アーケード筐体に振り切った単一テーマ */
+  html,body{background:var(--bezel);}
+  body{
+    color:var(--text);
+    font-family:"Hiragino Kaku Gothic ProN","Yu Gothic",Menlo,monospace;
+    display:flex;flex-direction:column;align-items:center;
+    min-height:100vh;padding:20px 12px 40px;gap:14px;
+  }
+  h1{
+    font-size:clamp(17px,3.4vw,26px);
+    font-weight:900;letter-spacing:.14em;color:var(--marquee);
+    text-shadow:0 3px 0 #5a4a00,0 0 22px rgba(255,210,63,.25);
+    text-align:center;text-wrap:balance;margin-top:6px;
+  }
+  h1 small{display:block;font-size:.5em;color:var(--marquee-dim);letter-spacing:.4em;margin-bottom:6px;}
+  .cab{
+    position:relative;width:min(960px,100%);
+    border:3px solid var(--bezel-edge);border-radius:10px;
+    box-shadow:0 0 0 6px #05070c,0 18px 50px rgba(0,0,0,.6);
+    overflow:hidden;background:#000;
+  }
+  canvas{display:block;width:100%;height:auto;image-rendering:pixelated;}
+  .cab::after{ /* うっすらCRT走査線 */
+    content:"";position:absolute;inset:0;pointer-events:none;
+    background:repeating-linear-gradient(0deg,rgba(0,0,0,.13) 0 1px,transparent 1px 3px);
+    mix-blend-mode:multiply;
+  }
+  .controls{
+    display:flex;flex-wrap:wrap;justify-content:center;gap:8px 18px;
+    font-size:12.5px;color:var(--text-dim);letter-spacing:.05em;
+  }
+  .controls b{
+    color:var(--text);background:#1a2030;border:1px solid #2a3450;
+    border-radius:4px;padding:1px 7px;font-family:Menlo,monospace;font-weight:700;
+  }
+  .warn{font-size:11px;color:var(--text-dim);letter-spacing:.08em;}
+  .warn em{color:var(--danger);font-style:normal;}
+</style>
+
+<h1><small>TRUC ARCADE presents</small>スーパーおしっこ垂れ流しブラザーズ</h1>
+
+<div class="cab"><canvas id="g" width="960" height="540"></canvas></div>
+
+<div class="controls">
+  <span><b>← →</b> 移動</span>
+  <span><b>SPACE / ↑</b> ジャンプ(2段)</span>
+  <span><b>X 長押し</b> がまん(放水停止)</span>
+  <span><b>R</b> リスタート</span>
+  <span>タップ=ジャンプ(スマホ)</span>
+</div>
+<p class="warn">がまんし過ぎると<em>限界突破の大放水</em>が始まります。自分のおしっこの跳ね返りに注意。</p>
+
+<script>
+"use strict";
+const cvs = document.getElementById("g");
+const ctx = cvs.getContext("2d");
+const W = cvs.width, H = cvs.height;
+const GY = 470;                 // 地面の高さ
+const PX_PER_M = 50;            // 50px = 1m
+
+// ---- 状態 ----
+let state = "title";            // title | play | over
+let keys = {};
+let dist = 0;                   // 進んだ距離(px)
+let best = +(localStorage.getItem("oshikko_best") || 0);
+let shake = 0;
+let frame = 0;
+
+const player = {
+  x: 170, y: GY - 48, w: 34, h: 48,
+  vx: 0, vy: 0, onGround: true, jumps: 0,
+  hp: 100, inv: 0,
+  gaman: 100, holding: false, burst: 0,   // burst>0 の間は限界大放水
+};
+
+let pee = [];       // {x,y,vx,vy,splash}
+let enemies = [];   // {x,y,w,h,type,phase,dead}
+let effects = [];   // {x,y,t,txt,color}
+let clouds = [];
+let spawnT = 1.5;
+let splashCD = 0;   // 跳ね返り飛沫のクールダウン
+
+function speed(){ return 4 + Math.min(7, dist / 2500); }
+function meters(){ return Math.floor(dist / PX_PER_M); }
+
+function reset(){
+  dist = 0; pee = []; enemies = []; effects = []; spawnT = 1.5; shake = 0; splashCD = 0;
+  player.y = GY - player.h; player.vy = 0; player.onGround = true; player.jumps = 0;
+  player.hp = 100; player.inv = 0; player.gaman = 100; player.burst = 0;
+  clouds = [];
+  for (let i = 0; i < 6; i++) clouds.push({x: Math.random()*W, y: 40+Math.random()*140, s: 40+Math.random()*50});
+}
+reset();
+
+// ---- サウンド(WebAudio、初回入力で起動) ----
+let AC = null, peeGain = null;
+function audio(){
+  if (AC) return;
+  try{
+    AC = new (window.AudioContext || window.webkitAudioContext)();
+    // おしっこのせせらぎ:ホワイトノイズ+バンドパス
+    const len = AC.sampleRate * 1;
+    const buf = AC.createBuffer(1, len, AC.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random()*2-1;
+    const src = AC.createBufferSource(); src.buffer = buf; src.loop = true;
+    const bp = AC.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 2600; bp.Q.value = 1.2;
+    peeGain = AC.createGain(); peeGain.gain.value = 0;
+    src.connect(bp).connect(peeGain).connect(AC.destination);
+    src.start();
+  }catch(e){}
+}
+function sfx(f0, f1, dur, type, vol){
+  if (!AC) return;
+  try{
+    const o = AC.createOscillator(), g = AC.createGain();
+    o.type = type || "square";
+    o.frequency.setValueAtTime(f0, AC.currentTime);
+    o.frequency.exponentialRampToValueAtTime(Math.max(f1,1), AC.currentTime + dur);
+    g.gain.setValueAtTime(vol || .06, AC.currentTime);
+    g.gain.exponentialRampToValueAtTime(.001, AC.currentTime + dur);
+    o.connect(g).connect(AC.destination);
+    o.start(); o.stop(AC.currentTime + dur);
+  }catch(e){}
+}
+
+// ---- 入力 ----
+function jump(){
+  if (state === "title"){ state = "play"; reset(); return; }
+  if (state === "over"){ return; }
+  if (player.onGround || player.jumps < 2){
+    player.vy = player.onGround ? -12.5 : -10.5;
+    player.onGround = false; player.jumps++;
+    sfx(420, 900, .12, "square", .05);
+  }
+}
+addEventListener("keydown", e => {
+  if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) e.preventDefault();
+  audio();
+  if (!keys[e.code]){
+    if (e.code === "Space" || e.code === "ArrowUp") jump();
+    if (e.code === "KeyR" && state === "over"){ state = "play"; reset(); }
+    if ((e.code === "Space" || e.code === "Enter") && state === "over"){ state = "play"; reset(); }
+  }
+  keys[e.code] = true;
+});
+addEventListener("keyup", e => keys[e.code] = false);
+cvs.addEventListener("pointerdown", () => {
+  audio();
+  if (state === "over"){ state = "play"; reset(); }
+  else jump();
+});
+
+// ---- 更新 ----
+function rects(a, b){ return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y; }
+
+function update(dt, ds){
+  frame++;
+  if (state !== "play"){
+    if (peeGain) peeGain.gain.value = 0;
+    return;
+  }
+  dist += speed() * dt;
+
+  // --- プレイヤー移動 ---
+  const mv = 4.2;
+  if (keys.ArrowLeft)  player.x -= mv * dt;
+  if (keys.ArrowRight) player.x += mv * dt;
+  player.x = Math.max(30, Math.min(W * 0.55, player.x));
+
+  player.vy += 0.55 * dt;
+  player.y += player.vy * dt;
+  if (player.y >= GY - player.h){
+    player.y = GY - player.h; player.vy = 0;
+    player.onGround = true; player.jumps = 0;
+  }
+  if (player.inv > 0) player.inv -= ds;
+
+  // --- がまんゲージ ---
+  player.holding = !!keys.KeyX && player.burst <= 0;
+  if (player.holding){
+    player.gaman -= 32 * ds;
+    if (player.gaman <= 0){ player.gaman = 0; player.burst = 2.2; player.holding = false;
+      effects.push({x: player.x, y: player.y - 24, t: 1, txt: "限界突破!!", color: "#ff5c4d"});
+      sfx(180, 60, .4, "sawtooth", .09);
+      shake = 8;
+    }
+  } else {
+    player.gaman = Math.min(100, player.gaman + 18 * ds);
+  }
+  if (player.burst > 0) player.burst -= ds;
+
+  // --- 放水 ---
+  if (splashCD > 0) splashCD -= ds;
+  const peeing = !player.holding;
+  if (peeGain) peeGain.gain.value = peeing ? (player.burst > 0 ? .05 : .022) : 0;
+  if (peeing){
+    const n = player.burst > 0 ? 6 : 2;
+    for (let i = 0; i < n; i++){
+      pee.push({
+        x: player.x + player.w - 2,
+        y: player.y + player.h * 0.52,
+        vx: 5.2 + Math.random()*2.2 - speed()*0.35 + (player.burst > 0 ? 2 : 0),
+        vy: -(2.5 + Math.random()*2.0),
+        splash: false,
+      });
+    }
+  }
+  for (let i = pee.length - 1; i >= 0; i--){
+    const p = pee[i];
+    p.vy += 0.34 * dt;
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    if (p.y >= GY){
+      if (!p.splash && splashCD <= 0){
+        // 跳ね返り飛沫:予告付きボレーで自分に向かって飛んでくる
+        splashCD = Math.max(0.65, 1.5 - meters()/600) * (player.burst > 0 ? 0.5 : 1);
+        effects.push({x: p.x - 26, y: GY - 34, t: .55, txt: "ピチャ!", color: "#f0b429"});
+        sfx(1200, 500, .08, "triangle", .04);
+        const k = 2 + Math.floor(Math.random()*2);
+        for (let j = 0; j < k; j++){
+          pee.push({
+            x: p.x, y: GY - 2,
+            vx: -(1.6 + Math.random()*1.4) - speed()*0.18,
+            vy: -(5.0 + Math.random()*2.5),
+            splash: true,
+          });
+        }
+      }
+      pee.splice(i, 1);
+      continue;
+    }
+    if (p.x < -20 || p.x > W + 40){ pee.splice(i, 1); continue; }
+
+    const hitbox = {x: p.x - 3, y: p.y - 3, w: 6, h: 6};
+    if (p.splash){
+      // 飛沫はプレイヤーにダメージ(判定は甘め)
+      const pbox = {x: player.x + 7, y: player.y + 6, w: player.w - 14, h: player.h - 8};
+      if (player.inv <= 0 && rects(hitbox, pbox)){
+        player.hp -= 5; player.inv = 0.6;
+        effects.push({x: player.x + 10, y: player.y - 10, t: .8, txt: "きたない!", color: "#f0b429"});
+        sfx(300, 120, .15, "triangle", .06);
+        pee.splice(i, 1);
+        continue;
+      }
+    } else {
+      // 本流は敵に当たる
+      for (const e of enemies){
+        if (!e.dead && rects(hitbox, e)){
+          e.dead = true;
+          effects.push({x: e.x, y: e.y - 14, t: .8, txt: "ジャー!", color: "#ffe066"});
+          sfx(700, 200, .18, "square", .05);
+          pee.splice(i, 1);
+          break;
+        }
+      }
+    }
+  }
+
+  // --- 敵 ---
+  spawnT -= ds;
+  if (spawnT <= 0){
+    const m = meters();
+    const fly = m > 150 && Math.random() < 0.35;
+    if (fly){
+      enemies.push({x: W + 60, y: GY - 130 - Math.random()*60, w: 40, h: 30, type: "fly", phase: Math.random()*6.28, dead: false});
+    } else {
+      enemies.push({x: W + 60, y: GY - 36, w: 42, h: 36, type: "poop", phase: 0, dead: false});
+    }
+    spawnT = Math.max(0.55, 1.7 - m/400) * (0.6 + Math.random()*0.8);
+  }
+  for (let i = enemies.length - 1; i >= 0; i--){
+    const e = enemies[i];
+    if (e.dead){
+      e.y += 6 * dt; e.x -= speed() * dt;
+      if (e.y > H + 60) enemies.splice(i, 1);
+      continue;
+    }
+    e.x -= (speed() + (e.type === "fly" ? 1.8 : 0.8)) * dt;
+    if (e.type === "fly"){ e.phase += 0.09 * dt; e.y += Math.sin(e.phase) * 1.6 * dt; }
+    if (e.x < -80){ enemies.splice(i, 1); continue; }
+
+    if (rects(e, player)){
+      const stomp = player.vy > 1 && (player.y + player.h) - e.y < 20;
+      if (stomp){
+        e.dead = true; player.vy = -10; player.onGround = false; player.jumps = 1;
+        effects.push({x: e.x, y: e.y - 14, t: .8, txt: "ふみっ!", color: "#8de969"});
+        sfx(500, 900, .1, "square", .06);
+      } else if (player.inv <= 0){
+        player.hp -= 18; player.inv = 1.0; shake = 10;
+        player.x = Math.max(30, player.x - 40);
+        player.vy = -6; player.onGround = false;
+        effects.push({x: player.x, y: player.y - 16, t: .9, txt: "いたい!", color: "#ff5c4d"});
+        sfx(200, 60, .3, "sawtooth", .08);
+      }
+    }
+  }
+
+  // --- 汎用 ---
+  for (let i = effects.length - 1; i >= 0; i--){
+    effects[i].t -= ds; effects[i].y -= 30 * ds;
+    if (effects[i].t <= 0) effects.splice(i, 1);
+  }
+  for (const c of clouds){
+    c.x -= speed() * 0.25 * dt;
+    if (c.x < -c.s*2){ c.x = W + c.s; c.y = 40 + Math.random()*140; }
+  }
+  if (shake > 0) shake = Math.max(0, shake - 30 * ds);
+
+  if (player.hp <= 0){
+    player.hp = 0; state = "over";
+    const m = meters();
+    if (m > best){ best = m; localStorage.setItem("oshikko_best", best); }
+    if (peeGain) peeGain.gain.value = 0;
+    sfx(400, 40, .8, "sawtooth", .08);
+  }
+}
+
+// ---- 描画 ----
+function px(x, y, w, h, c){ ctx.fillStyle = c; ctx.fillRect(x|0, y|0, w, h); }
+
+function drawPlayer(){
+  if (player.inv > 0 && Math.floor(frame / 4) % 2 === 0) return; // 被弾点滅
+  const {x, y} = player;
+  const run = player.onGround ? Math.floor(dist / 14) % 2 : 2;
+  // 帽子(赤)
+  px(x+4, y, 26, 8, "#e23b2e");
+  px(x, y+6, 30, 4, "#e23b2e");
+  // 顔
+  px(x+4, y+10, 24, 14, "#ffcba0");
+  px(x+20, y+13, 4, 4, "#222");           // 目
+  px(x+10, y+20, 12, 3, "#e0906a");       // ほっぺ/口元
+  // 裸のからだ(小便小僧なので)
+  px(x+6, y+24, 20, 14, "#ffcba0");
+  px(x+8, y+30, 6, 6, "#f5b283");         // おなか陰影
+  // 前に構えた両手
+  px(x+24, y+28, 8, 5, "#ffcba0");
+  // 脚(走りアニメ)
+  if (run === 0){ px(x+7, y+38, 7, 10, "#ffcba0"); px(x+19, y+40, 7, 8, "#ffcba0"); }
+  else if (run === 1){ px(x+7, y+40, 7, 8, "#ffcba0"); px(x+19, y+38, 7, 10, "#ffcba0"); }
+  else { px(x+8, y+38, 7, 8, "#ffcba0"); px(x+18, y+38, 7, 8, "#ffcba0"); }
+  // がまん中の顔
+  if (player.holding){ px(x+18, y+12, 8, 2, "#222"); px(x+10, y+21, 12, 4, "#c9503a"); }
+}
+
+function drawEnemy(e){
+  if (e.type === "poop"){
+    const c1 = e.dead ? "#6b6b6b" : "#8b5a2b", c2 = e.dead ? "#555" : "#6e4520";
+    px(e.x+6,  e.y,    30, 10, c2);
+    px(e.x+2,  e.y+10, 38, 12, c1);
+    px(e.x-2,  e.y+22, 46, 14, c2);
+    if (!e.dead){
+      px(e.x+10, e.y+14, 6, 6, "#fff"); px(e.x+26, e.y+14, 6, 6, "#fff");
+      px(e.x+12, e.y+16, 3, 3, "#222"); px(e.x+28, e.y+16, 3, 3, "#222");
+    }
+  } else {
+    const flap = Math.floor(frame / 5) % 2 === 0;
+    px(e.x+8, e.y+8, 24, 16, e.dead ? "#666" : "#3a3f4a");
+    px(e.x+26, e.y+10, 8, 6, "#c33");
+    if (!e.dead){
+      px(e.x+2, e.y + (flap ? 0 : 10), 14, 8, "#cfd6e4");
+      px(e.x+18, e.y + (flap ? 0 : 10), 14, 8, "#cfd6e4");
+      px(e.x+28, e.y+12, 4, 3, "#fff");
+    }
+  }
+}
+
+function draw(){
+  ctx.save();
+  if (shake > 0) ctx.translate((Math.random()-.5)*shake, (Math.random()-.5)*shake);
+
+  // 空
+  px(0, 0, W, H, "#64b0ff");
+  // 雲
+  for (const c of clouds){
+    px(c.x, c.y, c.s*1.6, 14, "#fff");
+    px(c.x+c.s*0.3, c.y-10, c.s, 12, "#fff");
+  }
+  // 遠景の丘
+  ctx.fillStyle = "#3f9e46";
+  for (let i = -1; i < 5; i++){
+    const hx = i*300 - (dist*0.4) % 300;
+    ctx.beginPath(); ctx.arc(hx+150, GY, 90, Math.PI, 0); ctx.fill();
+  }
+  // 地面(レンガ)
+  px(0, GY, W, H-GY, "#b85c1e");
+  ctx.fillStyle = "#7a3b10";
+  const off = dist % 48;
+  for (let x = -48; x < W + 48; x += 48){
+    ctx.fillRect(x - off, GY, 48, 2);
+    ctx.fillRect(x - off, GY, 2, 24);
+    ctx.fillRect(x - off + 24, GY + 24, 2, 24);
+    ctx.fillRect(x - off, GY + 24, 48, 2);
+  }
+  px(0, GY, W, 4, "#8de969"); // 草の縁
+
+  // おしっこ(飛沫=危険玉は大きく描いて視認しやすく)
+  for (const p of pee){
+    if (p.splash){
+      ctx.fillStyle = "#f0b429";
+      ctx.fillRect(p.x-4, p.y-4, 8, 8);
+      ctx.fillStyle = "#fff3c4";
+      ctx.fillRect(p.x-1, p.y-3, 3, 3);
+    } else {
+      ctx.fillStyle = "#ffe066";
+      ctx.fillRect(p.x-2, p.y-2, 4, 4);
+    }
+  }
+
+  for (const e of enemies) drawEnemy(e);
+  drawPlayer();
+
+  // エフェクト文字
+  for (const f of effects){
+    ctx.globalAlpha = Math.min(1, f.t * 2);
+    ctx.fillStyle = f.color;
+    ctx.font = "bold 18px Menlo, monospace";
+    ctx.fillText(f.txt, f.x, f.y);
+    ctx.globalAlpha = 1;
+  }
+
+  // ---- HUD ----
+  px(0, 0, W, 52, "rgba(6,10,18,.78)");
+  // HP
+  ctx.fillStyle = "#e8e4d8"; ctx.font = "bold 13px Menlo, monospace";
+  ctx.fillText("HP", 18, 32);
+  px(48, 20, 204, 16, "#22283a");
+  px(50, 22, 200 * Math.max(0, player.hp)/100, 12, player.hp > 35 ? "#4cd35d" : "#e23b2e");
+  // がまん
+  ctx.fillText("がまん", 280, 32);
+  px(340, 20, 124, 16, "#22283a");
+  px(342, 22, 120 * player.gaman/100, 12, player.burst > 0 ? "#ff5c4d" : "#4aa8ff");
+  // 距離
+  ctx.textAlign = "right";
+  ctx.font = "bold 22px Menlo, monospace";
+  ctx.fillStyle = "#ffd23f";
+  ctx.fillText(meters() + " m", W - 20, 34);
+  ctx.font = "bold 12px Menlo, monospace";
+  ctx.fillStyle = "#8f94a3";
+  ctx.fillText("ベスト " + best + " m", W - 130, 33);
+  ctx.textAlign = "left";
+
+  // ---- 画面 ----
+  if (state === "title"){
+    px(0, 0, W, H, "rgba(4,8,16,.62)");
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ffd23f";
+    ctx.font = "bold 40px 'Hiragino Kaku Gothic ProN', sans-serif";
+    ctx.fillText("スーパーおしっこ", W/2, 190);
+    ctx.fillText("垂れ流しブラザーズ", W/2, 240);
+    ctx.fillStyle = "#e8e4d8";
+    ctx.font = "bold 16px 'Hiragino Kaku Gothic ProN', sans-serif";
+    ctx.fillText("走れば走るほど 風でおしっこが自分に返ってくる", W/2, 300);
+    ctx.fillText("敵は 踏む か よける。飛沫は よける しかない", W/2, 328);
+    if (Math.floor(frame/30) % 2 === 0){
+      ctx.fillStyle = "#8de969";
+      ctx.font = "bold 20px Menlo, monospace";
+      ctx.fillText("SPACE か タップ でスタート", W/2, 400);
+    }
+    ctx.textAlign = "left";
+  }
+  if (state === "over"){
+    px(0, 0, W, H, "rgba(4,8,16,.7)");
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#e23b2e";
+    ctx.font = "bold 44px 'Hiragino Kaku Gothic ProN', sans-serif";
+    ctx.fillText("お も ら し 終 了", W/2, 210);
+    ctx.fillStyle = "#ffd23f";
+    ctx.font = "bold 30px Menlo, monospace";
+    ctx.fillText("記録  " + meters() + " m", W/2, 280);
+    ctx.fillStyle = "#8f94a3";
+    ctx.font = "bold 16px Menlo, monospace";
+    ctx.fillText("ベスト " + best + " m", W/2, 314);
+    if (Math.floor(frame/30) % 2 === 0){
+      ctx.fillStyle = "#8de969";
+      ctx.font = "bold 18px Menlo, monospace";
+      ctx.fillText("R か タップ で もう一回", W/2, 380);
+    }
+    ctx.textAlign = "left";
+  }
+  ctx.restore();
+}
+
+// ---- ループ ----
+let last = performance.now();
+function loop(now){
+  const ms = Math.min(50, now - last); last = now;
+  const dt = ms / 16.666;   // フレーム係数
+  const ds = ms / 1000;     // 秒
+  update(dt, ds);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
