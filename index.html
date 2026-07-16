@@ -95,8 +95,9 @@
     background:rgba(226,59,46,.45);border:2px solid rgba(226,59,46,.95);
   }
   :root.touch #btnGaman{
+    /* キャラの定位置(地面際)と重ならないよう画面高さ比で上げる */
     left:calc(18px + env(safe-area-inset-left));
-    bottom:calc(26px + env(safe-area-inset-bottom));
+    bottom:calc(26dvh + env(safe-area-inset-bottom));
     width:76px;height:76px;font-size:15px;
     background:rgba(74,168,255,.35);border:2px solid rgba(74,168,255,.9);
   }
