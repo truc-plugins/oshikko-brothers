@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>スーパーおしっこ垂れ流しブラザーズ</title>
 <style>
   *{margin:0;padding:0;box-sizing:border-box;}
@@ -64,7 +64,7 @@
     position:fixed;inset:0;width:100vw;height:100dvh;
     border:0;border-radius:0;box-shadow:none;
   }
-  :root.touch canvas{width:100%;height:100%;}
+  :root.touch canvas{width:100%;height:100%;touch-action:none;}
 
   #joyZone,#btnJump,#btnGaman,#rotate{display:none;}
   :root.touch #joyZone{
@@ -82,7 +82,7 @@
   }
   :root.touch #btnJump,
   :root.touch #btnGaman{
-    display:flex;position:fixed;z-index:5;border-radius:50%;
+    display:flex;position:fixed;z-index:6;border-radius:50%;
     align-items:center;justify-content:center;
     font-weight:800;color:#fff;letter-spacing:.05em;
     touch-action:none;user-select:none;-webkit-user-select:none;
@@ -95,8 +95,8 @@
     background:rgba(226,59,46,.45);border:2px solid rgba(226,59,46,.95);
   }
   :root.touch #btnGaman{
-    right:calc(140px + env(safe-area-inset-right));
-    bottom:calc(70px + env(safe-area-inset-bottom));
+    left:calc(18px + env(safe-area-inset-left));
+    bottom:calc(26px + env(safe-area-inset-bottom));
     width:76px;height:76px;font-size:15px;
     background:rgba(74,168,255,.35);border:2px solid rgba(74,168,255,.9);
   }
@@ -247,6 +247,14 @@ if (navigator.maxTouchPoints > 0 || "ontouchstart" in window || matchMedia("(poi
   document.documentElement.classList.add("touch");
   UIS = 1.5;
   fit();
+  // 誤操作によるズームを抑止(iOSのピンチ/ダブルタップ対策)
+  for (const t of ["gesturestart", "gesturechange", "gestureend"]){
+    document.addEventListener(t, e => e.preventDefault(), {passive: false});
+  }
+  document.addEventListener("dblclick", e => e.preventDefault(), {passive: false});
+  document.addEventListener("touchmove", e => {
+    if (e.scale !== undefined && e.scale !== 1) e.preventDefault();
+  }, {passive: false});
 }
 addEventListener("resize", fit);
 
