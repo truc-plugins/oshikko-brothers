@@ -55,30 +55,61 @@
   .warn{font-size:11px;color:var(--text-dim);letter-spacing:.08em;}
   .warn em{color:var(--danger);font-style:normal;}
 
-  /* ---- タッチ端末用コントローラー(JSで:rootに.touchを付与) ---- */
-  #pad{display:none;}
-  :root.touch body{min-height:100dvh;padding:10px 10px 14px;gap:10px;}
-  :root.touch h1{margin-top:0;}
+  /* ---- タッチ端末: 全画面キャンバス+オーバーレイ操作(JSで:rootに.touchを付与) ---- */
+  :root.touch body{overflow:hidden;position:fixed;inset:0;padding:0;}
+  :root.touch h1,
   :root.touch .controls,
   :root.touch .warn{display:none;}
-  :root.touch #pad{
-    display:flex;width:min(960px,100%);gap:12px;
-    margin-top:auto;flex:1;max-height:min(44dvh,380px);min-height:170px;
+  :root.touch .cab{
+    position:fixed;inset:0;width:100vw;height:100dvh;
+    border:0;border-radius:0;box-shadow:none;
   }
-  #pad .grp{flex:1;display:flex;gap:12px;}
-  #pad .grp.right{flex-direction:column;}
-  #pad button{
-    flex:1;border-radius:18px;border:3px solid #2a3450;
-    background:#141a28;color:var(--text);
-    font-family:inherit;font-size:20px;font-weight:800;letter-spacing:.05em;
-    white-space:nowrap;
+  :root.touch canvas{width:100%;height:100%;}
+
+  #joyZone,#btnJump,#btnGaman,#rotate{display:none;}
+  :root.touch #joyZone{
+    display:block;position:fixed;left:0;bottom:0;width:46%;height:62%;z-index:5;
+    touch-action:none;user-select:none;-webkit-user-select:none;
+  }
+  #joyBase{
+    display:none;position:fixed;width:128px;height:128px;border-radius:50%;
+    border:2px solid rgba(255,255,255,.4);background:rgba(20,26,40,.35);
+    transform:translate(-50%,-50%);pointer-events:none;z-index:6;
+  }
+  #joyKnob{
+    position:absolute;left:50%;top:50%;width:58px;height:58px;border-radius:50%;
+    background:rgba(255,255,255,.55);transform:translate(-50%,-50%);
+  }
+  :root.touch #btnJump,
+  :root.touch #btnGaman{
+    display:flex;position:fixed;z-index:5;border-radius:50%;
+    align-items:center;justify-content:center;
+    font-weight:800;color:#fff;letter-spacing:.05em;
     touch-action:none;user-select:none;-webkit-user-select:none;
     -webkit-tap-highlight-color:transparent;
   }
-  #pad button:active{transform:scale(.95);filter:brightness(1.45);}
-  #pad #btnJ{flex:1.3;background:#7a1f16;border-color:#e23b2e;}
-  #pad #btnX{flex:.8;background:#123252;border-color:#4aa8ff;font-size:16px;}
-  #pad #btnL,#pad #btnR{font-size:26px;}
+  :root.touch #btnJump{
+    right:calc(20px + env(safe-area-inset-right));
+    bottom:calc(26px + env(safe-area-inset-bottom));
+    width:104px;height:104px;font-size:19px;
+    background:rgba(226,59,46,.45);border:2px solid rgba(226,59,46,.95);
+  }
+  :root.touch #btnGaman{
+    right:calc(140px + env(safe-area-inset-right));
+    bottom:calc(70px + env(safe-area-inset-bottom));
+    width:76px;height:76px;font-size:15px;
+    background:rgba(74,168,255,.35);border:2px solid rgba(74,168,255,.9);
+  }
+  #btnJump:active,#btnGaman:active{filter:brightness(1.5);transform:scale(.95);}
+
+  @media (orientation: portrait){
+    :root.touch #rotate{
+      display:flex;position:fixed;inset:0;z-index:9;background:var(--bezel);
+      flex-direction:column;align-items:center;justify-content:center;gap:16px;
+      color:var(--marquee);font-weight:800;font-size:20px;letter-spacing:.08em;
+    }
+    :root.touch #rotate .ico{font-size:56px;}
+  }
 </style>
 </head>
 <body>
@@ -87,23 +118,18 @@
 
 <div class="cab"><canvas id="g" width="960" height="540"></canvas></div>
 
-<div id="pad">
-  <div class="grp">
-    <button id="btnL" aria-label="左に移動">◀</button>
-    <button id="btnR" aria-label="右に移動">▶</button>
-  </div>
-  <div class="grp right">
-    <button id="btnX" aria-label="がまん(押している間 放水停止)">がまん</button>
-    <button id="btnJ" aria-label="ジャンプ">ジャンプ</button>
-  </div>
-</div>
+<div id="rotate"><span class="ico">📱↷</span>スマホを横向きにしてね</div>
+<div id="joyZone" aria-label="移動スティック(上にはじくとジャンプ)"></div>
+<div id="joyBase"><div id="joyKnob"></div></div>
+<div id="btnGaman" role="button" aria-label="がまん(押している間 放水停止)">がまん</div>
+<div id="btnJump" role="button" aria-label="ジャンプ">ジャンプ</div>
 
 <div class="controls">
   <span><b>← →</b> 移動</span>
   <span><b>SPACE / ↑</b> ジャンプ(2段)</span>
   <span><b>X 長押し</b> がまん(放水停止)</span>
   <span><b>R</b> リスタート</span>
-  <span>タップ=ジャンプ(スマホ)</span>
+  <span>スマホ=横持ちで スティック移動+上はじきジャンプ</span>
 </div>
 <p class="warn">がまんし過ぎると<em>限界突破の大放水</em>が始まります。自分のおしっこの跳ね返りに注意。</p>
 
@@ -111,7 +137,9 @@
 "use strict";
 const cvs = document.getElementById("g");
 const ctx = cvs.getContext("2d");
-const W = cvs.width, H = cvs.height;
+let W = cvs.width;              // タッチ端末では画面比率に合わせて可変
+const H = cvs.height;
+let UIS = 1;                    // HUD表示倍率(タッチ端末で拡大)
 const GY = 470;                 // 地面の高さ
 const PX_PER_M = 50;            // 50px = 1m
 
@@ -208,10 +236,20 @@ cvs.addEventListener("pointerdown", () => {
   else jump();
 });
 
-// ---- タッチ用コントローラー ----
+// ---- タッチ用コントローラー(全画面+ジョイスティック) ----
+function fit(){
+  // 画面の縦横比に合わせて見える世界の幅を決める(高さ540は固定)
+  if (!document.documentElement.classList.contains("touch")) return;
+  const a = Math.max(1, innerWidth / innerHeight);
+  W = cvs.width = Math.round(H * Math.min(a, 2.4));
+}
 if (navigator.maxTouchPoints > 0 || "ontouchstart" in window || matchMedia("(pointer: coarse)").matches){
   document.documentElement.classList.add("touch");
+  UIS = 1.5;
+  fit();
 }
+addEventListener("resize", fit);
+
 function bindBtn(id, down, up){
   const el = document.getElementById(id);
   el.addEventListener("pointerdown", e => {
@@ -225,13 +263,51 @@ function bindBtn(id, down, up){
   el.addEventListener("pointercancel", release);
   el.addEventListener("contextmenu", e => e.preventDefault());
 }
-bindBtn("btnL", () => keys.ArrowLeft = true,  () => keys.ArrowLeft = false);
-bindBtn("btnR", () => keys.ArrowRight = true, () => keys.ArrowRight = false);
-bindBtn("btnX", () => keys.KeyX = true,       () => keys.KeyX = false);
-bindBtn("btnJ", () => {
+bindBtn("btnGaman", () => keys.KeyX = true, () => keys.KeyX = false);
+bindBtn("btnJump", () => {
   if (state === "over"){ state = "play"; reset(); }
   else jump();
 }, () => {});
+
+// フローティングスティック: 触れた場所に出現。左右で移動、上にはじくとジャンプ
+const joyZone = document.getElementById("joyZone");
+const joyBase = document.getElementById("joyBase");
+const joyKnob = document.getElementById("joyKnob");
+let joyId = null, joyOX = 0, joyOY = 0, joyArmed = true;
+
+function joyMove(e){
+  let dx = e.clientX - joyOX, dy = e.clientY - joyOY;
+  const R = 54, len = Math.hypot(dx, dy);
+  if (len > R){ dx *= R/len; dy *= R/len; }
+  joyKnob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+  keys.ArrowLeft  = dx < -12;
+  keys.ArrowRight = dx >  12;
+  if (dy < -28 && joyArmed){
+    if (state === "over"){ state = "play"; reset(); } else jump();
+    joyArmed = false;
+  }
+  if (dy > -14) joyArmed = true;   // 一度戻すと再ジャンプ可(2段ジャンプ用)
+}
+function joyEnd(){
+  joyId = null; joyArmed = true;
+  keys.ArrowLeft = keys.ArrowRight = false;
+  joyBase.style.display = "none";
+}
+joyZone.addEventListener("pointerdown", e => {
+  e.preventDefault();
+  audio();
+  joyId = e.pointerId;
+  try{ joyZone.setPointerCapture(e.pointerId); }catch(_){}
+  joyOX = e.clientX; joyOY = e.clientY;
+  joyBase.style.display = "block";
+  joyBase.style.left = joyOX + "px";
+  joyBase.style.top  = joyOY + "px";
+  joyKnob.style.transform = "translate(-50%,-50%)";
+});
+joyZone.addEventListener("pointermove", e => { if (e.pointerId === joyId) joyMove(e); });
+joyZone.addEventListener("pointerup",     e => { if (e.pointerId === joyId){ e.preventDefault(); joyEnd(); } });
+joyZone.addEventListener("pointercancel", e => { if (e.pointerId === joyId){ e.preventDefault(); joyEnd(); } });
+joyZone.addEventListener("contextmenu", e => e.preventDefault());
 
 // ---- 更新 ----
 function rects(a, b){ return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y; }
@@ -501,25 +577,26 @@ function draw(){
     ctx.globalAlpha = 1;
   }
 
-  // ---- HUD ----
-  px(0, 0, W, 52, "rgba(6,10,18,.78)");
+  // ---- HUD(タッチ端末ではUIS倍で拡大表示) ----
+  const s = UIS;
+  px(0, 0, W, 52*s, "rgba(6,10,18,.78)");
   // HP
-  ctx.fillStyle = "#e8e4d8"; ctx.font = "bold 13px Menlo, monospace";
-  ctx.fillText("HP", 18, 32);
-  px(48, 20, 204, 16, "#22283a");
-  px(50, 22, 200 * Math.max(0, player.hp)/100, 12, player.hp > 35 ? "#4cd35d" : "#e23b2e");
+  ctx.fillStyle = "#e8e4d8"; ctx.font = `bold ${13*s}px Menlo, monospace`;
+  ctx.fillText("HP", 18*s, 32*s);
+  px(48*s, 20*s, 204*s, 16*s, "#22283a");
+  px(50*s, 22*s, 200*s * Math.max(0, player.hp)/100, 12*s, player.hp > 35 ? "#4cd35d" : "#e23b2e");
   // がまん
-  ctx.fillText("がまん", 280, 32);
-  px(340, 20, 124, 16, "#22283a");
-  px(342, 22, 120 * player.gaman/100, 12, player.burst > 0 ? "#ff5c4d" : "#4aa8ff");
+  ctx.fillText("がまん", 280*s, 32*s);
+  px(340*s, 20*s, 124*s, 16*s, "#22283a");
+  px(342*s, 22*s, 120*s * player.gaman/100, 12*s, player.burst > 0 ? "#ff5c4d" : "#4aa8ff");
   // 距離
   ctx.textAlign = "right";
-  ctx.font = "bold 22px Menlo, monospace";
+  ctx.font = `bold ${22*s}px Menlo, monospace`;
   ctx.fillStyle = "#ffd23f";
-  ctx.fillText(meters() + " m", W - 20, 34);
-  ctx.font = "bold 12px Menlo, monospace";
+  ctx.fillText(meters() + " m", W - 20*s, 34*s);
+  ctx.font = `bold ${12*s}px Menlo, monospace`;
   ctx.fillStyle = "#8f94a3";
-  ctx.fillText("ベスト " + best + " m", W - 130, 33);
+  ctx.fillText("ベスト " + best + " m", W - 130*s, 33*s);
   ctx.textAlign = "left";
 
   // ---- 画面 ----
